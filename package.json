@@ -1,0 +1,11 @@
+{
+  "name": "sonar",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sonar — 1-to-1 video calling and ephemeral chat (MERN + Daily.co)",
+  "scripts": {
+    "server": "npm run dev --prefix server",
+    "client": "npm run dev --prefix client",
+    "install:all": "npm install --prefix server && npm install --prefix client"
+  }
+}
