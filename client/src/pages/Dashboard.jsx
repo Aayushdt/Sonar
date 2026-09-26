@@ -15,6 +15,10 @@ import {
   AlertCircle,
   Wifi,
   Sparkles,
+  Star,
+  ChevronLeft,
+  ChevronRight,
+  XCircle,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
@@ -43,19 +47,37 @@ const formatDate = (isoString) => {
 
 const Dashboard = ({ theme, onToggleTheme }) => {
   const { user, token } = useAuth();
-  const { socketRef, onlineUserIds, incomingCall, clearIncomingCall } = useSocket();
+  const {
+    socketRef,
+    onlineUserIds,
+    incomingCall,
+    clearIncomingCall,
+    callNotification,
+    dismissCallNotification,
+    cancelCall: socketCancelCall,
+  } = useSocket();
   const navigate = useNavigate();
 
   const [allUsers, setAllUsers] = useState([]);
   const [onlineUsers, setOnlineUsers] = useState([]);
+  const [friendsList, setFriendsList] = useState(user?.friends || []);
   const [callHistory, setCallHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(true);
   const [callingUserId, setCallingUserId] = useState(null);
   const [toast, setToast] = useState(null);
   const [peerSearch, setPeerSearch] = useState('');
   const [historyFilter, setHistoryFilter] = useState('all'); // 'all' | 'outgoing' | 'incoming'
+  const [callPage, setCallPage] = useState(1);
+  const [callPagination, setCallPagination] = useState({ page: 1, totalPages: 1, total: 0 });
 
-  // ── Fetch all users and call history on mount / token change ─────────
+  // Sync friends from user object
+  useEffect(() => {
+    if (user?.friends) {
+      setFriendsList(user.friends);
+    }
+  }, [user]);
+
+  // ── Fetch all users and call history on mount / page change ─────────
   const fetchDashboardData = useCallback(async () => {
     if (!token) return;
     try {
@@ -63,7 +85,7 @@ const Dashboard = ({ theme, onToggleTheme }) => {
         fetch(`${API_BASE}/auth/users`, {
           headers: { Authorization: `Bearer ${token}` },
         }),
-        fetch(`${API_BASE}/calls`, {
+        fetch(`${API_BASE}/calls?page=${callPage}&limit=8`, {
           headers: { Authorization: `Bearer ${token}` },
         }),
       ]);
@@ -74,19 +96,55 @@ const Dashboard = ({ theme, onToggleTheme }) => {
       }
 
       if (callsRes.ok) {
-        const { calls } = await callsRes.json();
-        setCallHistory(calls || []);
+        const data = await callsRes.json();
+        setCallHistory(data.calls || []);
+        if (data.pagination) {
+          setCallPagination(data.pagination);
+        }
       }
     } catch (err) {
       console.error('Failed to load dashboard data:', err);
     } finally {
       setHistoryLoading(false);
     }
-  }, [token]);
+  }, [token, callPage]);
 
   useEffect(() => {
     fetchDashboardData();
   }, [fetchDashboardData]);
+
+  // Handle socket call notification toasts
+  useEffect(() => {
+    if (callNotification) {
+      setCallingUserId(null);
+      setToast({
+        type: callNotification.type === 'missed' ? 'error' : 'info',
+        msg: callNotification.message,
+      });
+      setTimeout(() => {
+        dismissCallNotification();
+        setToast(null);
+      }, 5000);
+    }
+  }, [callNotification, dismissCallNotification]);
+
+  // Toggle favorite friend
+  const toggleFriendContact = async (friendId) => {
+    try {
+      const res = await fetch(`${API_BASE}/auth/friends/${friendId}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setFriendsList(data.friends || []);
+        setToast({ type: 'success', msg: data.message });
+        setTimeout(() => setToast(null), 3000);
+      }
+    } catch (e) {
+      console.error('Failed to toggle contact favorite', e);
+    }
+  };
 
   // ── Map onlineUserIds to real user names from allUsers / callHistory ──
   useEffect(() => {
@@ -132,6 +190,17 @@ const Dashboard = ({ theme, onToggleTheme }) => {
       showToast('error', 'Transmission declined by remote station.');
     };
 
+    const handleMissed = () => {
+      setCallingUserId(null);
+      showToast('error', 'Transmission timed out. Recipient did not respond.');
+      fetchDashboardData();
+    };
+
+    const handleCancelled = () => {
+      setCallingUserId(null);
+      showToast('info', 'Transmission was cancelled.');
+    };
+
     const handleError = ({ message }) => {
       setCallingUserId(null);
       showToast('error', message || 'Call error encountered.');
@@ -139,14 +208,18 @@ const Dashboard = ({ theme, onToggleTheme }) => {
 
     socket.on('call:accepted', handleAccepted);
     socket.on('call:rejected', handleRejected);
+    socket.on('call:missed', handleMissed);
+    socket.on('call:cancelled', handleCancelled);
     socket.on('call:error', handleError);
 
     return () => {
       socket.off('call:accepted', handleAccepted);
       socket.off('call:rejected', handleRejected);
+      socket.off('call:missed', handleMissed);
+      socket.off('call:cancelled', handleCancelled);
       socket.off('call:error', handleError);
     };
-  }, [socketRef.current, navigate, showToast]); // eslint-disable-line
+  }, [socketRef.current, navigate, showToast, fetchDashboardData]); // eslint-disable-line
 
   // ── Start a call ─────────────────────────────────────────────────────
   const startCall = (recipientId) => {
@@ -157,7 +230,11 @@ const Dashboard = ({ theme, onToggleTheme }) => {
   };
 
   const cancelCall = () => {
-    setCallingUserId(null);
+    if (callingUserId) {
+      socketCancelCall(null, callingUserId);
+      setCallingUserId(null);
+      showToast('info', 'Outgoing transmission cancelled.');
+    }
   };
 
   // ── Incoming call: Accept / Reject ───────────────────────────────────
@@ -372,8 +449,26 @@ const Dashboard = ({ theme, onToggleTheme }) => {
                             </div>
                           </div>
 
-                          {/* Action Button */}
-                          <div>
+                          {/* Action Button & Favorite Toggle */}
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              onClick={() => toggleFriendContact(u._id)}
+                              title={
+                                friendsList.includes(u._id)
+                                  ? 'Remove from favorite contacts'
+                                  : 'Star contact as favorite'
+                              }
+                              className="p-1.5 rounded-lg hover:bg-surface dark:hover:bg-surface-dark transition-colors text-text-muted hover:text-accent"
+                            >
+                              <Star
+                                className={`w-3.5 h-3.5 ${
+                                  friendsList.includes(u._id)
+                                    ? 'fill-accent text-accent'
+                                    : 'text-text-muted/60'
+                                }`}
+                              />
+                            </button>
+
                             {isCurrentPeerCalling ? (
                               <motion.button
                                 whileTap={{ scale: 0.95 }}
@@ -575,6 +670,7 @@ const Dashboard = ({ theme, onToggleTheme }) => {
                       <tr className="bg-surface-2/80 dark:bg-surface-2-dark/80 border-b border-border dark:border-border-dark font-mono text-[11px] text-text-muted dark:text-text-muted-dark uppercase tracking-wider">
                         <th className="py-3 px-5">Type / Remote</th>
                         <th className="py-3 px-4">Local</th>
+                        <th className="py-3 px-4">Status</th>
                         <th className="py-3 px-4">Duration</th>
                         <th className="py-3 px-5 text-right">Timestamp</th>
                       </tr>
@@ -586,6 +682,9 @@ const Dashboard = ({ theme, onToggleTheme }) => {
                           ? call.receiver?.name || 'Remote Station'
                           : call.caller?.name || 'Remote Station';
 
+                        const isMissed = call.status === 'missed';
+                        const isRejected = call.status === 'rejected';
+
                         return (
                           <tr
                             key={call._id}
@@ -595,12 +694,20 @@ const Dashboard = ({ theme, onToggleTheme }) => {
                               <div className="flex items-center gap-2.5">
                                 <div
                                   className={`w-7 h-7 rounded-lg flex items-center justify-center ${
-                                    isCaller
+                                    isMissed
+                                      ? 'bg-warning-tint dark:bg-warning-tint-dark text-warning'
+                                      : isRejected
+                                      ? 'bg-danger-tint dark:bg-danger-tint-dark text-danger'
+                                      : isCaller
                                       ? 'bg-secondary-tint dark:bg-secondary-tint-dark text-secondary dark:text-secondary-dark'
                                       : 'bg-success-tint dark:bg-success-tint-dark text-success dark:text-success-dark'
                                   }`}
                                 >
-                                  {isCaller ? (
+                                  {isMissed ? (
+                                    <Clock className="w-3.5 h-3.5" />
+                                  ) : isRejected ? (
+                                    <PhoneOff className="w-3.5 h-3.5" />
+                                  ) : isCaller ? (
                                     <PhoneOutgoing className="w-3.5 h-3.5" />
                                   ) : (
                                     <PhoneIncoming className="w-3.5 h-3.5" />
@@ -621,19 +728,59 @@ const Dashboard = ({ theme, onToggleTheme }) => {
                                 {user?.name}
                               </span>
                             </td>
+                            <td className="py-3.5 px-4">
+                              <span
+                                className={`px-2 py-0.5 rounded font-mono text-[10px] font-semibold uppercase ${
+                                  isMissed
+                                    ? 'bg-warning-tint text-warning border border-warning/30'
+                                    : isRejected
+                                    ? 'bg-danger-tint text-danger border border-danger/30'
+                                    : 'bg-success-tint text-success border border-success/30'
+                                }`}
+                              >
+                                {call.status || 'COMPLETED'}
+                              </span>
+                            </td>
                             <td className="py-3.5 px-4 font-mono font-medium text-text dark:text-text-dark">
                               <span className="px-2 py-0.5 rounded bg-primary-tint/60 dark:bg-primary-tint-dark/60 text-primary dark:text-primary-dark">
                                 {formatDuration(call.durationSeconds)}
                               </span>
                             </td>
                             <td className="py-3.5 px-5 text-right font-mono text-text-muted dark:text-text-muted-dark">
-                              {formatDate(call.startedAt)}
+                              {formatDate(call.startedAt || call.createdAt)}
                             </td>
                           </tr>
                         );
                       })}
                     </tbody>
                   </table>
+                </div>
+              )}
+
+              {/* Pagination Controls */}
+              {callPagination.totalPages > 1 && (
+                <div className="p-4 border-t border-border dark:border-border-dark flex items-center justify-between text-xs font-mono bg-surface-2/30 dark:bg-surface-2-dark/30">
+                  <span className="text-text-muted dark:text-text-muted-dark">
+                    Page {callPagination.page} of {callPagination.totalPages} ({callPagination.total} logs)
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setCallPage((p) => Math.max(1, p - 1))}
+                      disabled={callPage <= 1}
+                      className="px-3 py-1.5 rounded-lg border border-border dark:border-border-dark bg-surface dark:bg-surface-dark disabled:opacity-40 disabled:cursor-not-allowed hover:bg-surface-2 transition-colors flex items-center gap-1 shadow-tactile-sm"
+                    >
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                      <span>Prev</span>
+                    </button>
+                    <button
+                      onClick={() => setCallPage((p) => Math.min(callPagination.totalPages, p + 1))}
+                      disabled={callPage >= callPagination.totalPages}
+                      className="px-3 py-1.5 rounded-lg border border-border dark:border-border-dark bg-surface dark:bg-surface-dark disabled:opacity-40 disabled:cursor-not-allowed hover:bg-surface-2 transition-colors flex items-center gap-1 shadow-tactile-sm"
+                    >
+                      <span>Next</span>
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
               )}
             </div>

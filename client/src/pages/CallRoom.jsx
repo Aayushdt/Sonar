@@ -53,12 +53,20 @@ const CallRoom = () => {
     localVideoRef,
     remoteVideoRef,
     remoteAudioRef,
+    remoteScreenRef,
     isAudioMuted,
     isVideoOff,
+    isScreenSharing,
+    isBackgroundBlur,
+    isNoiseCancellation,
+    networkState,
     remoteParticipant,
     callError,
     toggleAudio,
     toggleVideo,
+    toggleScreenShare,
+    toggleBackgroundBlur,
+    toggleNoiseCancellation,
     hangUp,
   } = useDailyCall(roomUrl, handleCallConnected, handleCallEnded);
 
@@ -203,11 +211,19 @@ const CallRoom = () => {
             localVideoRef={localVideoRef}
             remoteVideoRef={remoteVideoRef}
             remoteAudioRef={remoteAudioRef}
+            remoteScreenRef={remoteScreenRef}
             isAudioMuted={isAudioMuted}
             isVideoOff={isVideoOff}
+            isScreenSharing={isScreenSharing}
+            isBackgroundBlur={isBackgroundBlur}
+            isNoiseCancellation={isNoiseCancellation}
+            networkState={networkState}
             remoteParticipant={remoteParticipant}
             toggleAudio={toggleAudio}
             toggleVideo={toggleVideo}
+            toggleScreenShare={toggleScreenShare}
+            toggleBackgroundBlur={toggleBackgroundBlur}
+            toggleNoiseCancellation={toggleNoiseCancellation}
             onHangUp={handleHangUp}
           />
         </div>

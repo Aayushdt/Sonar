@@ -78,7 +78,14 @@ export const getMe = async (req, res) => {
     if (!user) {
       return res.status(404).json({ message: 'User not found.' });
     }
-    res.json({ user: { _id: user._id, name: user.name, email: user.email } });
+    res.json({
+      user: {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        friends: user.friends || [],
+      },
+    });
   } catch (err) {
     console.error('[getMe]', err);
     res.status(500).json({ message: 'Server error fetching user.' });
@@ -93,5 +100,60 @@ export const getUsers = async (req, res) => {
   } catch (err) {
     console.error('[getUsers]', err);
     res.status(500).json({ message: 'Server error fetching users.' });
+  }
+};
+
+// GET /api/auth/friends  (protected by authMiddleware)
+export const getFriends = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).populate('friends', '_id name email');
+    if (!user) {
+      return res.status(404).json({ message: 'User not found.' });
+    }
+    res.json({ friends: user.friends || [] });
+  } catch (err) {
+    console.error('[getFriends]', err);
+    res.status(500).json({ message: 'Server error fetching friends.' });
+  }
+};
+
+// POST /api/auth/friends/:friendId  (toggle friend)
+export const toggleFriend = async (req, res) => {
+  try {
+    const { friendId } = req.params;
+    const userId = req.user.id;
+
+    if (friendId === userId) {
+      return res.status(400).json({ message: 'Cannot add yourself as a friend.' });
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found.' });
+    }
+
+    const friendIndex = user.friends.indexOf(friendId);
+    let isFriend = false;
+
+    if (friendIndex > -1) {
+      // Remove friend
+      user.friends.splice(friendIndex, 1);
+      isFriend = false;
+    } else {
+      // Add friend
+      user.friends.push(friendId);
+      isFriend = true;
+    }
+
+    await user.save();
+    res.json({
+      success: true,
+      isFriend,
+      friends: user.friends,
+      message: isFriend ? 'Contact added to favorites.' : 'Contact removed from favorites.',
+    });
+  } catch (err) {
+    console.error('[toggleFriend]', err);
+    res.status(500).json({ message: 'Server error updating friends list.' });
   }
 };

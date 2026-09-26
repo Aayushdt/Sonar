@@ -17,10 +17,18 @@ const onlineUsers = new Map(); // userId  => socketId
 const socketToUser = new Map(); // socketId => userId
 
 // ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 // In-memory active call sessions
 // callId => { callerId, calleeId, startedAt }
 // ─────────────────────────────────────────────────────────────────────────────
 const activeCalls = new Map();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// In-memory pending call invitations
+// callId => { timeoutId, callerId, recipientId, createdAt }
+// ─────────────────────────────────────────────────────────────────────────────
+const pendingInvites = new Map();
+const INVITE_TIMEOUT_MS = 30000; // 30 seconds
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper: create a Daily.co room via their REST API
@@ -37,7 +45,9 @@ const createDailyRoom = async () => {
       properties: {
         // Room expires 1 hour from now
         exp: Math.floor(Date.now() / 1000) + 3600,
-        max_participants: 2,
+        max_participants: 10,
+        enable_chat: false, // We handle ephemeral chat via Socket.io
+        enable_screenshare: true,
       },
     }),
   });
@@ -84,8 +94,7 @@ const initSocketHandlers = (io) => {
     // ──────────────────────────────────────────────────────────────────────────
     // PHASE 3: Call signaling — call:invite
     // Caller sends { recipientId }.
-    // Server resolves caller's name from DB, generates a callId,
-    // then forwards call:incoming to the callee.
+    // Server sets 30s timeout, resolves caller name from DB, forwards call:incoming.
     // ──────────────────────────────────────────────────────────────────────────
     socket.on('call:invite', async ({ recipientId }) => {
       const callerId = socketToUser.get(socket.id);
@@ -104,6 +113,44 @@ const initSocketHandlers = (io) => {
         if (!callerUser) return;
 
         const callId = uuidv4();
+        const createdAt = new Date();
+
+        // Setup 30s invite timeout — emits call:missed if no response
+        const timeoutId = setTimeout(async () => {
+          pendingInvites.delete(callId);
+
+          const curCallerSocket = onlineUsers.get(callerId);
+          const curRecipientSocket = onlineUsers.get(recipientId);
+
+          if (curCallerSocket) {
+            io.to(curCallerSocket).emit('call:missed', { callId, reason: 'timeout' });
+          }
+          if (curRecipientSocket) {
+            io.to(curRecipientSocket).emit('call:missed', { callId, reason: 'timeout' });
+          }
+
+          try {
+            await Call.create({
+              caller: callerId,
+              receiver: recipientId,
+              startedAt: createdAt,
+              endedAt: new Date(),
+              durationSeconds: 0,
+              status: 'missed',
+            });
+            console.log(`[Call] 30s timeout elapsed: marked as missed | callId: ${callId}`);
+          } catch (err) {
+            console.error('[call:invite timeout log]', err);
+          }
+        }, INVITE_TIMEOUT_MS);
+
+        pendingInvites.set(callId, {
+          callId,
+          callerId,
+          recipientId,
+          timeoutId,
+          createdAt,
+        });
 
         // Forward incoming call notification to callee
         io.to(recipientSocketId).emit('call:incoming', {
@@ -111,20 +158,43 @@ const initSocketHandlers = (io) => {
           caller: { id: callerId, name: callerUser.name },
         });
 
-        console.log(`[Call] ${callerUser.name} (${callerId}) → ${recipientId} | callId: ${callId}`);
+        console.log(`[Call] Invite: ${callerUser.name} (${callerId}) → ${recipientId} | callId: ${callId} (30s timer active)`);
       } catch (err) {
         console.error('[call:invite]', err);
       }
     });
 
     // ──────────────────────────────────────────────────────────────────────────
+    // Caller cancels invitation before acceptance
+    // ──────────────────────────────────────────────────────────────────────────
+    socket.on('call:cancel', ({ callId, recipientId }) => {
+      const pending = pendingInvites.get(callId);
+      if (pending) {
+        clearTimeout(pending.timeoutId);
+        pendingInvites.delete(callId);
+      }
+      const recipientSocketId = onlineUsers.get(recipientId);
+      if (recipientSocketId) {
+        io.to(recipientSocketId).emit('call:cancelled', { callId });
+      }
+      console.log(`[Call] Invitation cancelled by caller | callId: ${callId}`);
+    });
+
+    // ──────────────────────────────────────────────────────────────────────────
     // PHASE 3: Call signaling — call:accept
     // Callee sends { callId, callerId }.
-    // Server creates Daily.co room, sends call:accepted with roomUrl to BOTH peers.
+    // Clears invite timeout, creates Daily room, emits call:accepted to both.
     // ──────────────────────────────────────────────────────────────────────────
     socket.on('call:accept', async ({ callId, callerId }) => {
       const calleeId = socketToUser.get(socket.id);
       if (!calleeId) return;
+
+      // Clear any pending 30s invite timeout
+      const pending = pendingInvites.get(callId);
+      if (pending) {
+        clearTimeout(pending.timeoutId);
+        pendingInvites.delete(callId);
+      }
 
       const callerSocketId = onlineUsers.get(callerId);
       if (!callerSocketId) {
@@ -133,7 +203,6 @@ const initSocketHandlers = (io) => {
       }
 
       try {
-        // Fetch callee name to include in the response to caller
         const calleeUser = await User.findById(calleeId).select('name');
         if (!calleeUser) return;
 
@@ -174,13 +243,36 @@ const initSocketHandlers = (io) => {
 
     // ──────────────────────────────────────────────────────────────────────────
     // PHASE 3: Call signaling — call:reject
-    // Callee declines. No DB write — caller just gets a toast notification.
+    // Callee declines. Clears timeout and notifies caller.
     // ──────────────────────────────────────────────────────────────────────────
-    socket.on('call:reject', ({ callId, callerId }) => {
+    socket.on('call:reject', async ({ callId, callerId }) => {
+      const pending = pendingInvites.get(callId);
+      if (pending) {
+        clearTimeout(pending.timeoutId);
+        pendingInvites.delete(callId);
+      }
+
       const callerSocketId = onlineUsers.get(callerId);
       if (callerSocketId) {
         io.to(callerSocketId).emit('call:rejected', { callId });
       }
+
+      const calleeId = socketToUser.get(socket.id);
+      if (callerId && calleeId) {
+        try {
+          await Call.create({
+            caller: callerId,
+            receiver: calleeId,
+            startedAt: new Date(),
+            endedAt: new Date(),
+            durationSeconds: 0,
+            status: 'rejected',
+          });
+        } catch (err) {
+          console.error('[call:reject log]', err);
+        }
+      }
+
       console.log(`[Call] Rejected | callId: ${callId}`);
     });
 
@@ -199,9 +291,7 @@ const initSocketHandlers = (io) => {
     });
 
     // ──────────────────────────────────────────────────────────────────────────
-    // PHASE 5: Ephemeral in-call chat — chat:message
-    // Server forwards the message to the other participant's socket.
-    // NOT persisted to MongoDB.
+    // PHASE 5: Ephemeral in-call chat — chat:message, typing & read receipts
     // ──────────────────────────────────────────────────────────────────────────
     socket.on('chat:message', ({ callId, senderId, senderName, text, timestamp }) => {
       const session = activeCalls.get(callId);
@@ -219,6 +309,47 @@ const initSocketHandlers = (io) => {
           text,
           timestamp,
         });
+      }
+    });
+
+    // Typing indicators
+    socket.on('chat:typing', ({ callId, senderName }) => {
+      const session = activeCalls.get(callId);
+      if (!session) return;
+
+      const userId = socketToUser.get(socket.id);
+      const peerId = userId === session.callerId ? session.calleeId : session.callerId;
+      const peerSocketId = onlineUsers.get(peerId);
+
+      if (peerSocketId) {
+        io.to(peerSocketId).emit('chat:typing', { callId, senderId: userId, senderName });
+      }
+    });
+
+    socket.on('chat:stop-typing', ({ callId }) => {
+      const session = activeCalls.get(callId);
+      if (!session) return;
+
+      const userId = socketToUser.get(socket.id);
+      const peerId = userId === session.callerId ? session.calleeId : session.callerId;
+      const peerSocketId = onlineUsers.get(peerId);
+
+      if (peerSocketId) {
+        io.to(peerSocketId).emit('chat:stop-typing', { callId, senderId: userId });
+      }
+    });
+
+    // Read receipt
+    socket.on('chat:read', ({ callId, messageTimestamp }) => {
+      const session = activeCalls.get(callId);
+      if (!session) return;
+
+      const userId = socketToUser.get(socket.id);
+      const peerId = userId === session.callerId ? session.calleeId : session.callerId;
+      const peerSocketId = onlineUsers.get(peerId);
+
+      if (peerSocketId) {
+        io.to(peerSocketId).emit('chat:read', { callId, messageTimestamp, readerId: userId });
       }
     });
 
@@ -315,6 +446,19 @@ const initSocketHandlers = (io) => {
               }
 
               break;
+            }
+          }
+        }
+
+        // Clean up any pending invites involving this user
+        for (const [callId, invite] of pendingInvites.entries()) {
+          if (invite.callerId === userId || invite.recipientId === userId) {
+            clearTimeout(invite.timeoutId);
+            pendingInvites.delete(callId);
+            const otherId = invite.callerId === userId ? invite.recipientId : invite.callerId;
+            const otherSocketId = onlineUsers.get(otherId);
+            if (otherSocketId) {
+              io.to(otherSocketId).emit('call:missed', { callId, reason: 'disconnect' });
             }
           }
         }

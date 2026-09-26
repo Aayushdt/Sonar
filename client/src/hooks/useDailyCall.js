@@ -15,47 +15,61 @@ export const useDailyCall = (roomUrl, onCallConnected, onCallEnded) => {
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
   const remoteAudioRef = useRef(null);
+  const remoteScreenRef = useRef(null);
 
   const [isAudioMuted, setIsAudioMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [isBackgroundBlur, setIsBackgroundBlur] = useState(false);
+  const [isNoiseCancellation, setIsNoiseCancellation] = useState(false);
+  const [networkState, setNetworkState] = useState('connected'); // 'connected' | 'reconnecting' | 'interrupted'
   const [remoteParticipant, setRemoteParticipant] = useState(null);
   const [callError, setCallError] = useState(null);
 
   useEffect(() => {
     if (!roomUrl) return;
 
-    // 1. Create headless call object (we render our own UI, not the Daily iframe)
+    // 1. Create headless call object
     const call = DailyIframe.createCallObject();
     dailyRef.current = call;
 
-    // 2. Listen for local & remote track events to attach to <video> & <audio> elements
+    // 2. Listen for local & remote track events
     call.on('track-started', (event) => {
-      const { participant, track } = event;
+      const { participant, track, type } = event;
 
       if (participant.local) {
-        // Local track: attach to PIP video element (mirrored by CSS)
-        if (track.kind === 'video' && localVideoRef.current) {
+        if (track.kind === 'video' && type !== 'screenVideo' && localVideoRef.current) {
           localVideoRef.current.srcObject = new MediaStream([track]);
         }
       } else {
-        // Remote track: attach video to main element, audio to audio element
-        if (track.kind === 'video' && remoteVideoRef.current) {
+        if (type === 'screenVideo') {
+          if (remoteScreenRef.current) {
+            remoteScreenRef.current.srcObject = new MediaStream([track]);
+          } else if (remoteVideoRef.current) {
+            remoteVideoRef.current.srcObject = new MediaStream([track]);
+          }
+        } else if (track.kind === 'video' && remoteVideoRef.current) {
           remoteVideoRef.current.srcObject = new MediaStream([track]);
         }
+
         if (track.kind === 'audio' && remoteAudioRef.current) {
           remoteAudioRef.current.srcObject = new MediaStream([track]);
         }
-        // Notify caller that remote media has started — triggers startedAt logging
+
         if (onCallConnected) onCallConnected();
       }
     });
 
     call.on('track-stopped', (event) => {
-      const { participant, track } = event;
-      if (participant.local && track.kind === 'video' && localVideoRef.current) {
-        localVideoRef.current.srcObject = null;
-      } else if (!participant.local) {
-        if (track.kind === 'video' && remoteVideoRef.current) {
+      const { participant, track, type } = event;
+      if (participant.local) {
+        if (track.kind === 'video' && type !== 'screenVideo' && localVideoRef.current) {
+          localVideoRef.current.srcObject = null;
+        }
+      } else {
+        if (type === 'screenVideo') {
+          if (remoteScreenRef.current) remoteScreenRef.current.srcObject = null;
+        } else if (track.kind === 'video' && remoteVideoRef.current) {
           remoteVideoRef.current.srcObject = null;
         }
         if (track.kind === 'audio' && remoteAudioRef.current) {
@@ -76,32 +90,75 @@ export const useDailyCall = (roomUrl, onCallConnected, onCallEnded) => {
       }
     });
 
-    // Remote peer left — trigger hangup flow on local side
     call.on('participant-left', (event) => {
       if (!event.participant.local) {
         setRemoteParticipant(null);
         if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
         if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
+        if (remoteScreenRef.current) remoteScreenRef.current.srcObject = null;
         if (onCallEnded) onCallEnded();
+      }
+    });
+
+    // ── Screen sharing events ──
+    call.on('local-screen-share-started', () => {
+      setIsScreenSharing(true);
+    });
+
+    call.on('local-screen-share-stopped', () => {
+      setIsScreenSharing(false);
+    });
+
+    // ── Surface Daily's permission-denied & camera errors with clear UI messaging ──
+    call.on('camera-error', (err) => {
+      console.warn('[Daily] Camera error:', err);
+      const msg = err?.errorMsg?.errorMsg || err?.errorMsg || String(err);
+      if (
+        msg.toLowerCase().includes('notallowed') ||
+        msg.toLowerCase().includes('not-allowed') ||
+        msg.toLowerCase().includes('permission')
+      ) {
+        setCallError('Camera or microphone access was blocked. Please allow permissions in your browser URL bar.');
+      } else if (msg.toLowerCase().includes('notfound') || msg.toLowerCase().includes('devices')) {
+        setCallError('No camera/mic detected on your system. Continuing in receive-only mode.');
+      } else {
+        setCallError(`Hardware warning: ${msg}`);
+      }
+    });
+
+    call.on('nonfatal-error', (err) => {
+      console.warn('[Daily] Nonfatal error:', err);
+      const msg = err?.errorMsg || 'A momentary transmission jitter occurred.';
+      // Don't override critical permission errors
+      setCallError((prev) => prev || `Notice: ${msg}`);
+    });
+
+    // ── Network status tracking (reconnecting instead of frozen tile) ──
+    call.on('network-connection', (event) => {
+      console.log('[Daily] Network status:', event);
+      if (event.event === 'interrupted' || event.event === 'reconnecting') {
+        setNetworkState('reconnecting');
+      } else if (event.event === 'connected') {
+        setNetworkState('connected');
       }
     });
 
     call.on('error', (err) => {
       console.error('[Daily] Call error:', err);
-      setCallError('Video call error. Please try again.');
+      setCallError('Video transmission error. Please check your network connection.');
     });
 
     // 3. Join the Daily room
     call.join({ url: roomUrl }).catch((err) => {
       console.error('[Daily] join() failed:', err);
-      setCallError('Could not join the video room. Check your camera/microphone permissions.');
+      setCallError('Could not connect to video server. Ensure valid DAILY_API_KEY is configured in server/.env.');
     });
 
-    // 4. Cleanup: leave and destroy when component unmounts or roomUrl changes
+    // 4. Cleanup: leave and destroy
     return () => {
       call
         .leave()
-        .catch(() => {}) // swallow leave errors on forced unmount
+        .catch(() => {})
         .finally(() => {
           call.destroy();
           dailyRef.current = null;
@@ -109,12 +166,12 @@ export const useDailyCall = (roomUrl, onCallConnected, onCallEnded) => {
     };
   }, [roomUrl]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ─── Media toggle helpers (Daily API — no manual track.enabled manipulation) ───
+  // ─── Media toggle helpers ───
 
   const toggleAudio = () => {
     if (!dailyRef.current) return;
     const next = !isAudioMuted;
-    dailyRef.current.setLocalAudio(!next); // true = audio ON, false = audio OFF
+    dailyRef.current.setLocalAudio(!next);
     setIsAudioMuted(next);
   };
 
@@ -125,7 +182,58 @@ export const useDailyCall = (roomUrl, onCallConnected, onCallEnded) => {
     setIsVideoOff(next);
   };
 
-  // ─── Teardown ───────────────────────────────────────────────────────────────
+  // ─── Screen Sharing ───
+  const toggleScreenShare = async () => {
+    if (!dailyRef.current) return;
+    try {
+      if (isScreenSharing) {
+        await dailyRef.current.stopScreenShare();
+        setIsScreenSharing(false);
+      } else {
+        await dailyRef.current.startScreenShare();
+        setIsScreenSharing(true);
+      }
+    } catch (err) {
+      console.warn('[Daily] Screen share error/cancelled:', err);
+      setIsScreenSharing(false);
+    }
+  };
+
+  // ─── Background Blur ───
+  const toggleBackgroundBlur = async () => {
+    if (!dailyRef.current || !dailyRef.current.updateInputSettings) return;
+    try {
+      const next = !isBackgroundBlur;
+      await dailyRef.current.updateInputSettings({
+        video: {
+          processor: next ? { type: 'background-blur' } : { type: 'none' },
+        },
+      });
+      setIsBackgroundBlur(next);
+    } catch (err) {
+      console.warn('[Daily] Background blur unsupported or failed:', err);
+      setCallError('Background blur is not supported by your current browser/hardware.');
+    }
+  };
+
+  // ─── Noise Cancellation (Krisp) ───
+  const toggleNoiseCancellation = async () => {
+    if (!dailyRef.current || !dailyRef.current.updateInputSettings) return;
+    try {
+      const next = !isNoiseCancellation;
+      await dailyRef.current.updateInputSettings({
+        audio: {
+          processor: next ? { type: 'noise-cancellation' } : { type: 'none' },
+        },
+      });
+      setIsNoiseCancellation(next);
+    } catch (err) {
+      console.warn('[Daily] Noise cancellation unsupported or failed:', err);
+      setCallError('Acoustic noise cancellation is not supported on this device.');
+    }
+  };
+
+  // ─── Teardown ───
   const hangUp = async () => {
     if (dailyRef.current) {
       try {
@@ -137,22 +245,30 @@ export const useDailyCall = (roomUrl, onCallConnected, onCallEnded) => {
         dailyRef.current = null;
       }
     }
-    // Clear video and audio elements
     if (localVideoRef.current) localVideoRef.current.srcObject = null;
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
     if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
+    if (remoteScreenRef.current) remoteScreenRef.current.srcObject = null;
   };
 
   return {
     localVideoRef,
     remoteVideoRef,
     remoteAudioRef,
+    remoteScreenRef,
     isAudioMuted,
     isVideoOff,
+    isScreenSharing,
+    isBackgroundBlur,
+    isNoiseCancellation,
+    networkState,
     remoteParticipant,
     callError,
     toggleAudio,
     toggleVideo,
+    toggleScreenShare,
+    toggleBackgroundBlur,
+    toggleNoiseCancellation,
     hangUp,
   };
 };
