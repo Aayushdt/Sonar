@@ -1,3 +1,4 @@
+import { useRef, useEffect } from 'react';
 import { motion } from 'motion/react';
 import {
   Mic,
@@ -12,7 +13,10 @@ import {
   Sparkles,
   Waves,
   RefreshCw,
+  Disc,
+  Square,
 } from 'lucide-react';
+import { useRecordingStore } from '../store/useRecordingStore';
 
 /**
  * VideoCall
@@ -38,6 +42,274 @@ const VideoCall = ({
   toggleNoiseCancellation,
   onHangUp,
 }) => {
+  const {
+    isRecording,
+    recordingSeconds,
+    recordingError,
+    lastRecordingUrl,
+    setIsRecording,
+    setRecordingSeconds,
+    setRecordingError,
+    setLastRecordingUrl,
+  } = useRecordingStore();
+
+  const mediaRecorderRef = useRef(null);
+  const recordedChunksRef = useRef([]);
+  const animationFrameRef = useRef(null);
+  const audioContextRef = useRef(null);
+  const timerIntervalRef = useRef(null);
+  const compositeStreamRef = useRef(null);
+  const localAudioStreamRef = useRef(null);
+  const lastUrlRef = useRef(null);
+
+  const formatDuration = (seconds) => {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
+
+  const cleanupResources = () => {
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+    if (timerIntervalRef.current) {
+      clearInterval(timerIntervalRef.current);
+      timerIntervalRef.current = null;
+    }
+    if (compositeStreamRef.current) {
+      compositeStreamRef.current.getTracks().forEach((track) => track.stop());
+      compositeStreamRef.current = null;
+    }
+    if (localAudioStreamRef.current) {
+      localAudioStreamRef.current.getTracks().forEach((track) => track.stop());
+      localAudioStreamRef.current = null;
+    }
+    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+      audioContextRef.current.close().catch(() => {});
+      audioContextRef.current = null;
+    }
+  };
+
+  const stopRecording = () => {
+    if (timerIntervalRef.current) {
+      clearInterval(timerIntervalRef.current);
+      timerIntervalRef.current = null;
+    }
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    } else {
+      cleanupResources();
+    }
+    setIsRecording(false);
+  };
+
+  const startRecording = async () => {
+    setRecordingError(null);
+
+    // Feature detect MediaRecorder support and canvas.captureStream
+    if (
+      typeof window === 'undefined' ||
+      !window.MediaRecorder ||
+      typeof HTMLCanvasElement.prototype.captureStream !== 'function'
+    ) {
+      setRecordingError('MediaRecorder is not supported in this browser.');
+      return;
+    }
+
+    try {
+      // 1. Offscreen Canvas setup for video compositing
+      const canvas = document.createElement('canvas');
+      canvas.width = 1280;
+      canvas.height = 720;
+      const ctx = canvas.getContext('2d');
+
+      const drawFrame = () => {
+        // Clear background with dark tactile tone
+        ctx.fillStyle = '#0b0f17';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Draw remote screen share (if active) or remote video
+        const remoteVideo = remoteVideoRef?.current;
+        const remoteScreen = remoteScreenRef?.current;
+
+        let drewMain = false;
+        if (remoteScreen && remoteScreen.readyState >= 2 && !remoteScreen.paused) {
+          ctx.drawImage(remoteScreen, 0, 0, canvas.width, canvas.height);
+          drewMain = true;
+        } else if (remoteVideo && remoteVideo.readyState >= 2 && !remoteVideo.paused) {
+          ctx.drawImage(remoteVideo, 0, 0, canvas.width, canvas.height);
+          drewMain = true;
+        }
+
+        if (!drewMain) {
+          ctx.fillStyle = '#334155';
+          ctx.font = 'bold 20px monospace';
+          ctx.textAlign = 'center';
+          ctx.fillText('SONAR TRANSMISSION // AWAITING VIDEO FEED', canvas.width / 2, canvas.height / 2);
+        }
+
+        // Draw local Picture-In-Picture in bottom right
+        const localVideo = localVideoRef?.current;
+        if (localVideo && localVideo.readyState >= 2 && !isVideoOff) {
+          const pipWidth = 320;
+          const pipHeight = 180;
+          const pipX = canvas.width - pipWidth - 24;
+          const pipY = canvas.height - pipHeight - 24;
+
+          // PIP background
+          ctx.fillStyle = '#000000';
+          ctx.fillRect(pipX, pipY, pipWidth, pipHeight);
+
+          // Mirrored local video
+          ctx.save();
+          ctx.translate(pipX + pipWidth, pipY);
+          ctx.scale(-1, 1);
+          ctx.drawImage(localVideo, 0, 0, pipWidth, pipHeight);
+          ctx.restore();
+
+          // Border
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(pipX, pipY, pipWidth, pipHeight);
+        }
+
+        animationFrameRef.current = requestAnimationFrame(drawFrame);
+      };
+
+      animationFrameRef.current = requestAnimationFrame(drawFrame);
+      const canvasStream = canvas.captureStream(30);
+      const canvasVideoTrack = canvasStream.getVideoTracks()[0];
+
+      // 2. Mix local + remote audio tracks into one track using Web Audio API
+      const AudioCtxClass = window.AudioContext || window.webkitAudioContext;
+      const audioCtx = new AudioCtxClass();
+      audioContextRef.current = audioCtx;
+      const destination = audioCtx.createMediaStreamDestination();
+
+      let hasAudioSource = false;
+
+      // Remote audio track
+      const remoteAudioStream = remoteAudioRef?.current?.srcObject;
+      if (remoteAudioStream && remoteAudioStream.getAudioTracks().length > 0) {
+        const remoteAudioTrack = remoteAudioStream.getAudioTracks()[0];
+        const remoteAudioSource = audioCtx.createMediaStreamSource(new MediaStream([remoteAudioTrack]));
+        remoteAudioSource.connect(destination);
+        hasAudioSource = true;
+      }
+
+      // Local audio track: check localVideoRef.srcObject or request microphone
+      let localAudioTrack = null;
+      const localStream = localVideoRef?.current?.srcObject;
+      if (localStream && localStream.getAudioTracks().length > 0) {
+        localAudioTrack = localStream.getAudioTracks()[0];
+      } else if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        try {
+          const userMicStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          localAudioStreamRef.current = userMicStream;
+          localAudioTrack = userMicStream.getAudioTracks()[0];
+        } catch (micErr) {
+          console.warn('Could not acquire local microphone for recording:', micErr);
+        }
+      }
+
+      if (localAudioTrack) {
+        const localAudioSource = audioCtx.createMediaStreamSource(new MediaStream([localAudioTrack]));
+        localAudioSource.connect(destination);
+        hasAudioSource = true;
+      }
+
+      // 3. Combine canvas video track + mixed audio track into one MediaStream
+      const tracks = [canvasVideoTrack];
+      if (hasAudioSource && destination.stream.getAudioTracks().length > 0) {
+        tracks.push(destination.stream.getAudioTracks()[0]);
+      }
+      const compositeStream = new MediaStream(tracks);
+      compositeStreamRef.current = compositeStream;
+
+      // 4. MediaRecorder (webm/vp9 if supported, sensible fallback otherwise)
+      const mimeTypes = [
+        'video/webm;codecs=vp9,opus',
+        'video/webm;codecs=vp8,opus',
+        'video/webm;codecs=h264,opus',
+        'video/webm',
+        'video/mp4',
+      ];
+      const selectedMime = mimeTypes.find((t) => MediaRecorder.isTypeSupported(t)) || '';
+      const recorder = new MediaRecorder(
+        compositeStream,
+        selectedMime ? { mimeType: selectedMime } : undefined
+      );
+      mediaRecorderRef.current = recorder;
+      recordedChunksRef.current = [];
+
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          recordedChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onerror = (event) => {
+        setRecordingError('Recording error: ' + (event.error?.message || 'unknown error'));
+        stopRecording();
+      };
+
+      recorder.onstop = () => {
+        const blob = new Blob(recordedChunksRef.current, {
+          type: selectedMime || 'video/webm',
+        });
+
+        if (blob.size > 0) {
+          const url = URL.createObjectURL(blob);
+          if (lastUrlRef.current) {
+            URL.revokeObjectURL(lastUrlRef.current);
+          }
+          lastUrlRef.current = url;
+          setLastRecordingUrl(url);
+
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+          const a = document.createElement('a');
+          a.style.display = 'none';
+          a.href = url;
+          a.download = `sonar-call-${timestamp}.webm`;
+          document.body.appendChild(a);
+          a.click();
+          setTimeout(() => {
+            if (document.body.contains(a)) {
+              document.body.removeChild(a);
+            }
+          }, 100);
+        }
+        cleanupResources();
+      };
+
+      recorder.start(1000);
+      setIsRecording(true);
+      setRecordingSeconds(0);
+
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+      }
+      timerIntervalRef.current = setInterval(() => {
+        setRecordingSeconds((s) => s + 1);
+      }, 1000);
+    } catch (err) {
+      console.error('Failed to start call recording:', err);
+      setRecordingError(err.message || 'Failed to start call recording.');
+      cleanupResources();
+      setIsRecording(false);
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      cleanupResources();
+      if (lastUrlRef.current) {
+        URL.revokeObjectURL(lastUrlRef.current);
+      }
+    };
+  }, []);
+
   return (
     <div className="relative w-full h-full min-h-[420px] lg:min-h-[500px] bg-panel rounded-3xl overflow-hidden border border-border dark:border-border-dark shadow-tactile-lg flex items-center justify-center">
       {/* ── Remote audio element ── */}
@@ -98,6 +370,33 @@ const VideoCall = ({
           <div className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-primary/20 border border-primary/40 text-primary-light font-mono text-[10px]">
             <Sparkles className="w-3 h-3" />
             <span>BLUR ON</span>
+          </div>
+        )}
+
+        {/* Recording Active HUD Badge */}
+        {isRecording && (
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-danger/20 border border-danger/40 text-white font-mono text-[10px] animate-pulse">
+            <span className="w-2 h-2 rounded-full bg-danger inline-block" />
+            <span>REC {formatDuration(recordingSeconds)}</span>
+          </div>
+        )}
+
+        {/* Last Recording Download Link */}
+        {lastRecordingUrl && !isRecording && (
+          <a
+            href={lastRecordingUrl}
+            download="sonar-call-last.webm"
+            className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-white/90 font-mono text-[10px] transition-colors"
+            title="Download Last Recording"
+          >
+            <span>LAST REC ↓</span>
+          </a>
+        )}
+
+        {/* Recording Error Notice */}
+        {recordingError && (
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-danger/30 border border-danger/50 text-white font-mono text-[10px]">
+            <span>REC ERR: {recordingError}</span>
           </div>
         )}
       </div>
@@ -237,6 +536,25 @@ const VideoCall = ({
           }`}
         >
           <Waves className="w-4 h-4 sm:w-5 sm:h-5" />
+        </motion.button>
+
+        {/* Call Recording Toggle */}
+        <motion.button
+          whileHover={{ scale: 1.06 }}
+          whileTap={{ scale: 0.94 }}
+          onClick={isRecording ? stopRecording : startRecording}
+          title={isRecording ? `Stop Recording (${formatDuration(recordingSeconds)})` : 'Record Call Session'}
+          className={`tactile-btn w-10 h-10 sm:w-11 sm:h-11 rounded-xl flex items-center justify-center transition-all ${
+            isRecording
+              ? 'bg-danger text-white shadow-tactile-sm animate-pulse'
+              : 'bg-white/15 text-white hover:bg-white/25'
+          }`}
+        >
+          {isRecording ? (
+            <Square className="w-4 h-4 sm:w-5 sm:h-5 fill-current" />
+          ) : (
+            <Disc className="w-4 h-4 sm:w-5 sm:h-5 text-danger" />
+          )}
         </motion.button>
 
         <div className="w-[1px] h-6 bg-white/20 mx-0.5 sm:mx-1" />

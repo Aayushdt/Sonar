@@ -12,10 +12,13 @@ A full-stack real-time video calling and ephemeral chat application built with t
 ## ✨ Features
 
 - **1-to-1 Video & Audio Calls** — Powered by Daily.co managed SFU (no manual WebRTC/ICE handling)
+- **Client-Side Call Recording** — Record calls directly in the browser via `MediaRecorder` with no backend upload; mixes remote & local mirrored PIP video tracks on an offscreen `<canvas>` and combines local & remote audio via the Web Audio API (`AudioContext`). Exports automatically as `sonar-call-<timestamp>.webm`.
+- **Screen Sharing & Audio/Video FX** — Full screen sharing support, background blur, and Krisp acoustic noise cancellation directly in the tactile HUD deck.
 - **Real-Time Presence** — See who's online via Socket.io user tracking
-- **Call Signaling** — Invite → Accept/Reject flow with instant notifications
+- **Call Signaling** — Invite → Accept/Reject flow with instant notifications and 30s timeout protection
 - **Ephemeral In-Call Chat** — Real-time text messaging during calls (not persisted)
 - **Call History** — Completed calls logged to MongoDB with duration tracking
+- **React StrictMode Resilient** — Singleton + deferred teardown pattern in `useDailyCall.js` preventing duplicate instance conflicts in React 18/19 development mode.
 - **Dark/Light Theme** — Full dual-theme support with an earthy warm color palette
 - **JWT Authentication** — Secure login/register with bcrypt password hashing
 
@@ -62,6 +65,8 @@ Sonar/
 │       ├── main.jsx
 │       ├── App.jsx             # Router, theme toggle, protected routes
 │       ├── index.css           # Tailwind directives & dark mode base
+│       ├── store/
+│       │   └── useRecordingStore.js # Zustand store for call recording UI state
 │       ├── context/
 │       │   ├── AuthContext.jsx  # JWT auth state (login, register, logout)
 │       │   └── SocketContext.jsx # Socket.io connection & presence tracking

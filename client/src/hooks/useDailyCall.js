@@ -1,6 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import DailyIframe from '@daily-co/daily-js';
 
+// Module-level singleton reference and deferred cleanup timer.
+// In React 18+ development mode, StrictMode intentionally mounts, unmounts,
+// and immediately re-mounts components to detect unsafe side effects.
+// Because Daily.co enforces a strict single-instance constraint per document
+// ("Duplicate DailyIframe instances are not allowed"), an immediate synchronous
+// destroy/recreate would race against Daily's asynchronous teardown.
+// This pattern defers destruction across the tick so StrictMode's immediate
+// second mount reuses the surviving call instance instead of creating a duplicate.
+let sharedCallObject = null;
+let pendingDestroyTimeout = null;
+
 /**
  * useDailyCall
  * Encapsulates the Daily.co call object lifecycle.
@@ -29,12 +40,23 @@ export const useDailyCall = (roomUrl, onCallConnected, onCallEnded) => {
   useEffect(() => {
     if (!roomUrl) return;
 
-    // 1. Create headless call object
-    const call = DailyIframe.createCallObject();
+    // 1. Resolve or create Daily call object using singleton + deferred-cleanup pattern
+    if (pendingDestroyTimeout) {
+      clearTimeout(pendingDestroyTimeout);
+      pendingDestroyTimeout = null;
+    }
+
+    let call = sharedCallObject || DailyIframe.getCallInstance();
+    if (!call) {
+      call = DailyIframe.createCallObject();
+      sharedCallObject = call;
+    } else {
+      sharedCallObject = call;
+    }
     dailyRef.current = call;
 
-    // 2. Listen for local & remote track events
-    call.on('track-started', (event) => {
+    // 2. Event listener handlers
+    const handleTrackStarted = (event) => {
       const { participant, track, type } = event;
 
       if (participant.local) {
@@ -58,9 +80,9 @@ export const useDailyCall = (roomUrl, onCallConnected, onCallEnded) => {
 
         if (onCallConnected) onCallConnected();
       }
-    });
+    };
 
-    call.on('track-stopped', (event) => {
+    const handleTrackStopped = (event) => {
       const { participant, track, type } = event;
       if (participant.local) {
         if (track.kind === 'video' && type !== 'screenVideo' && localVideoRef.current) {
@@ -76,21 +98,21 @@ export const useDailyCall = (roomUrl, onCallConnected, onCallEnded) => {
           remoteAudioRef.current.srcObject = null;
         }
       }
-    });
+    };
 
-    call.on('participant-joined', (event) => {
+    const handleParticipantJoined = (event) => {
       if (!event.participant.local) {
         setRemoteParticipant(event.participant);
       }
-    });
+    };
 
-    call.on('participant-updated', (event) => {
+    const handleParticipantUpdated = (event) => {
       if (!event.participant.local) {
         setRemoteParticipant(event.participant);
       }
-    });
+    };
 
-    call.on('participant-left', (event) => {
+    const handleParticipantLeft = (event) => {
       if (!event.participant.local) {
         setRemoteParticipant(null);
         if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
@@ -98,19 +120,17 @@ export const useDailyCall = (roomUrl, onCallConnected, onCallEnded) => {
         if (remoteScreenRef.current) remoteScreenRef.current.srcObject = null;
         if (onCallEnded) onCallEnded();
       }
-    });
+    };
 
-    // ── Screen sharing events ──
-    call.on('local-screen-share-started', () => {
+    const handleScreenShareStarted = () => {
       setIsScreenSharing(true);
-    });
+    };
 
-    call.on('local-screen-share-stopped', () => {
+    const handleScreenShareStopped = () => {
       setIsScreenSharing(false);
-    });
+    };
 
-    // ── Surface Daily's permission-denied & camera errors with clear UI messaging ──
-    call.on('camera-error', (err) => {
+    const handleCameraError = (err) => {
       console.warn('[Daily] Camera error:', err);
       const msg = err?.errorMsg?.errorMsg || err?.errorMsg || String(err);
       if (
@@ -124,45 +144,88 @@ export const useDailyCall = (roomUrl, onCallConnected, onCallEnded) => {
       } else {
         setCallError(`Hardware warning: ${msg}`);
       }
-    });
+    };
 
-    call.on('nonfatal-error', (err) => {
+    const handleNonfatalError = (err) => {
       console.warn('[Daily] Nonfatal error:', err);
       const msg = err?.errorMsg || 'A momentary transmission jitter occurred.';
-      // Don't override critical permission errors
       setCallError((prev) => prev || `Notice: ${msg}`);
-    });
+    };
 
-    // ── Network status tracking (reconnecting instead of frozen tile) ──
-    call.on('network-connection', (event) => {
+    const handleNetworkConnection = (event) => {
       console.log('[Daily] Network status:', event);
       if (event.event === 'interrupted' || event.event === 'reconnecting') {
         setNetworkState('reconnecting');
       } else if (event.event === 'connected') {
         setNetworkState('connected');
       }
-    });
+    };
 
-    call.on('error', (err) => {
+    const handleError = (err) => {
       console.error('[Daily] Call error:', err);
       setCallError('Video transmission error. Please check your network connection.');
-    });
+    };
 
-    // 3. Join the Daily room
-    call.join({ url: roomUrl }).catch((err) => {
-      console.error('[Daily] join() failed:', err);
-      setCallError('Could not connect to video server. Ensure valid DAILY_API_KEY is configured in server/.env.');
-    });
+    // Attach listeners
+    call.on('track-started', handleTrackStarted);
+    call.on('track-stopped', handleTrackStopped);
+    call.on('participant-joined', handleParticipantJoined);
+    call.on('participant-updated', handleParticipantUpdated);
+    call.on('participant-left', handleParticipantLeft);
+    call.on('local-screen-share-started', handleScreenShareStarted);
+    call.on('local-screen-share-stopped', handleScreenShareStopped);
+    call.on('camera-error', handleCameraError);
+    call.on('nonfatal-error', handleNonfatalError);
+    call.on('network-connection', handleNetworkConnection);
+    call.on('error', handleError);
 
-    // 4. Cleanup: leave and destroy
+    // 3. Join the Daily room only if not already joined or joining
+    const meetingState = typeof call.meetingState === 'function' ? call.meetingState() : 'new';
+    if (meetingState === 'new' || meetingState === 'loaded') {
+      call.join({ url: roomUrl }).catch((err) => {
+        console.error('[Daily] join() failed:', err);
+        setCallError('Could not connect to video server. Ensure valid DAILY_API_KEY is configured in server/.env.');
+      });
+    } else if (meetingState === 'joined-meeting' && typeof call.participants === 'function') {
+      // If already joined on StrictMode remount, sync existing participant state
+      const participants = call.participants();
+      const remote = Object.values(participants).find((p) => !p.local);
+      if (remote) setRemoteParticipant(remote);
+    }
+
+    // 4. Deferred cleanup: do NOT destroy synchronously
     return () => {
-      call
-        .leave()
-        .catch(() => {})
-        .finally(() => {
-          call.destroy();
+      call.off('track-started', handleTrackStarted);
+      call.off('track-stopped', handleTrackStopped);
+      call.off('participant-joined', handleParticipantJoined);
+      call.off('participant-updated', handleParticipantUpdated);
+      call.off('participant-left', handleParticipantLeft);
+      call.off('local-screen-share-started', handleScreenShareStarted);
+      call.off('local-screen-share-stopped', handleScreenShareStopped);
+      call.off('camera-error', handleCameraError);
+      call.off('nonfatal-error', handleNonfatalError);
+      call.off('network-connection', handleNetworkConnection);
+      call.off('error', handleError);
+
+      if (pendingDestroyTimeout) {
+        clearTimeout(pendingDestroyTimeout);
+      }
+      pendingDestroyTimeout = setTimeout(() => {
+        pendingDestroyTimeout = null;
+        if (sharedCallObject) {
+          const callToDestroy = sharedCallObject;
+          sharedCallObject = null;
           dailyRef.current = null;
-        });
+          callToDestroy
+            .leave()
+            .catch(() => {})
+            .finally(() => {
+              try {
+                callToDestroy.destroy();
+              } catch (_) {}
+            });
+        }
+      }, 0);
     };
   }, [roomUrl]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -235,14 +298,20 @@ export const useDailyCall = (roomUrl, onCallConnected, onCallEnded) => {
 
   // ─── Teardown ───
   const hangUp = async () => {
-    if (dailyRef.current) {
+    if (pendingDestroyTimeout) {
+      clearTimeout(pendingDestroyTimeout);
+      pendingDestroyTimeout = null;
+    }
+    const call = dailyRef.current || sharedCallObject;
+    if (call) {
       try {
-        await dailyRef.current.leave();
-        dailyRef.current.destroy();
+        await call.leave();
+        call.destroy();
       } catch {
         // Ignore errors during manual hang-up
       } finally {
         dailyRef.current = null;
+        sharedCallObject = null;
       }
     }
     if (localVideoRef.current) localVideoRef.current.srcObject = null;

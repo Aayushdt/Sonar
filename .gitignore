@@ -6,11 +6,22 @@ node_modules/
 
 # Environment variables & local configuration
 .env
-.env.local
-.env.*.local
+.env*
+!.env.example
+!*.env.example
 *.env
 server/.env
 client/.env
+
+# Secrets & Certificates
+*.pem
+*.key
+*.cert
+*.crt
+
+# Local Media & Recordings
+*.webm
+*.mp4
 
 # Production build outputs
 dist/
