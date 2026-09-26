@@ -68,6 +68,7 @@ export default {
           tint: '#EDECE4',
           'tint-dark': '#39332F',
         },
+        'rust-fill': '#A03401',
         salmon: '#F29188',
         peach: '#E99C72',
         tan: '#D08C60',
@@ -113,7 +114,24 @@ export default {
         'sonar-dark': '0 0 0 1px rgba(253,251,246,.06)',
       },
       fontFamily: {
-        sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
+        sans: ['"Plus Jakarta Sans"', 'Inter', 'system-ui', '-apple-system', 'sans-serif'],
+        display: ['"Space Grotesk"', '"Plus Jakarta Sans"', 'sans-serif'],
+        mono: ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
+      },
+      keyframes: {
+        'bounce-in': {
+          '0%': { opacity: '0', transform: 'scale(0.85) translateY(10px)' },
+          '60%': { opacity: '1', transform: 'scale(1.02) translateY(-2px)' },
+          '100%': { opacity: '1', transform: 'scale(1) translateY(0)' },
+        },
+        'pulse-ring': {
+          '0%': { transform: 'scale(0.8)', opacity: '0.8' },
+          '80%, 100%': { transform: 'scale(2)', opacity: '0' },
+        },
+      },
+      animation: {
+        'bounce-in': 'bounce-in 0.4s ease-out',
+        'pulse-ring': 'pulse-ring 1.5s cubic-bezier(0.215, 0.61, 0.355, 1) infinite',
       },
     },
   },

@@ -1,18 +1,17 @@
 import { useState, useRef, useEffect } from 'react';
+import { motion } from 'motion/react';
+import { MessageSquare, Send, ShieldAlert, Radio } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 /**
- * ChatBox — ephemeral in-call chat via Socket.io.
- * Messages are NOT persisted to MongoDB; they exist only for the call duration.
- *
- * Props: socket, callId, messages, onSendMessage
+ * ChatBox — Ephemeral in-call chat via Socket.io.
+ * Messages exist strictly for active call lifecycle with zero DB persistence.
  */
 const ChatBox = ({ socket, callId, messages, onSendMessage }) => {
   const { user } = useAuth();
   const [text, setText] = useState('');
   const messagesEndRef = useRef(null);
 
-  // Auto-scroll to newest message
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
@@ -30,9 +29,7 @@ const ChatBox = ({ socket, callId, messages, onSendMessage }) => {
       timestamp: new Date().toISOString(),
     };
 
-    // Emit to server — server forwards to other peer
     socket.emit('chat:message', payload);
-    // Show our own message locally immediately
     onSendMessage(payload);
     setText('');
   };
@@ -42,63 +39,90 @@ const ChatBox = ({ socket, callId, messages, onSendMessage }) => {
   };
 
   return (
-    <div className="flex flex-col h-full bg-surface border border-border rounded-2xl overflow-hidden">
+    <div className="flex flex-col h-full bg-surface dark:bg-surface-dark border border-border dark:border-border-dark rounded-3xl overflow-hidden shadow-tactile-sm">
       {/* Header */}
-      <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-        <span className="text-lg">💬</span>
-        <span className="font-semibold text-text text-sm">In-Call Chat</span>
-        <span className="ml-auto text-xs text-text-muted italic">ephemeral</span>
+      <div className="px-5 py-4 border-b border-border dark:border-border-dark flex items-center justify-between bg-surface-2/40 dark:bg-surface-2-dark/40">
+        <div className="flex items-center gap-2.5">
+          <div className="w-7 h-7 rounded-lg bg-accent-tint dark:bg-accent-tint-dark text-accent dark:text-accent-dark flex items-center justify-center">
+            <MessageSquare className="w-3.5 h-3.5" />
+          </div>
+          <div>
+            <h3 className="font-display font-bold text-xs text-text dark:text-text-dark uppercase tracking-wider">
+              IN-CALL TELEMETRY
+            </h3>
+          </div>
+        </div>
+        <div className="flex items-center gap-1 text-[10px] font-mono text-text-muted dark:text-text-muted-dark bg-surface-2 dark:bg-surface-2-dark px-2 py-0.5 rounded-md border border-border/60 dark:border-border-dark/60">
+          <ShieldAlert className="w-3 h-3 text-secondary dark:text-secondary-dark" />
+          <span>EPHEMERAL</span>
+        </div>
       </div>
 
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-3 py-3 space-y-2 min-h-0">
-        {messages.length === 0 && (
-          <p className="text-center text-text-muted text-sm mt-8">
-            Say hello! 👋
-          </p>
-        )}
-        {messages.map((msg, idx) => {
-          const isOwn = msg.senderId === user._id;
-          return (
-            <div key={idx} className={`flex flex-col ${isOwn ? 'items-end' : 'items-start'}`}>
-              <div
-                className={`max-w-[85%] px-3 py-2 rounded-xl text-sm leading-relaxed
-                  ${isOwn
-                    ? 'bg-primary text-on-primary rounded-br-sm'
-                    : 'bg-surface-2 text-text rounded-bl-sm'
-                  }`}
+      {/* Messages Feed */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0 scrollbar-thin">
+        {messages.length === 0 ? (
+          <div className="h-full flex flex-col items-center justify-center text-center p-4 space-y-2 opacity-70">
+            <Radio className="w-6 h-6 text-text-muted dark:text-text-muted-dark animate-pulse" />
+            <p className="font-display font-medium text-xs text-text dark:text-text-dark">
+              Encrypted Channel Open
+            </p>
+            <p className="text-[11px] text-text-muted dark:text-text-muted-dark max-w-xs font-mono">
+              Send messages during this transmission. Transmissions vanish once the call terminates.
+            </p>
+          </div>
+        ) : (
+          messages.map((msg, idx) => {
+            const isOwn = msg.senderId === user._id;
+            return (
+              <motion.div
+                key={idx}
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.18 }}
+                className={`flex flex-col ${isOwn ? 'items-end' : 'items-start'}`}
               >
-                {!isOwn && (
-                  <p className="font-semibold text-xs text-text-muted mb-0.5">{msg.senderName}</p>
-                )}
-                <p>{msg.text}</p>
-              </div>
-              <span className="text-xs text-text-muted mt-0.5 px-1">{formatTime(msg.timestamp)}</span>
-            </div>
-          );
-        })}
+                <div
+                  className={`max-w-[85%] px-3.5 py-2.5 rounded-2xl text-xs leading-relaxed shadow-tactile-sm ${
+                    isOwn
+                      ? 'bg-primary dark:bg-primary-dark text-on-primary dark:text-on-primary-dark rounded-br-none'
+                      : 'bg-surface-2 dark:bg-surface-2-dark border border-border/80 dark:border-border-dark/80 text-text dark:text-text-dark rounded-bl-none'
+                  }`}
+                >
+                  {!isOwn && (
+                    <p className="font-mono font-bold text-[10px] text-accent dark:text-accent-dark mb-1 uppercase tracking-wider">
+                      {msg.senderName}
+                    </p>
+                  )}
+                  <p className="break-words">{msg.text}</p>
+                </div>
+                <span className="font-mono text-[10px] text-text-muted dark:text-text-muted-dark mt-1 px-1">
+                  {formatTime(msg.timestamp)}
+                </span>
+              </motion.div>
+            );
+          })
+        )}
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input */}
-      <form onSubmit={handleSend} className="px-3 py-3 border-t border-border flex gap-2">
+      {/* Input Form */}
+      <form onSubmit={handleSend} className="p-3 border-t border-border dark:border-border-dark bg-surface-2/30 dark:bg-surface-2-dark/30 flex gap-2">
         <input
           type="text"
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="Type a message…"
-          className="flex-1 bg-bg border border-border rounded-lg px-3 py-2 text-sm
-                     text-text placeholder-text-muted outline-none
-                     focus:ring-2 focus:ring-focus-ring transition-all"
+          placeholder="Transmit message to peer…"
+          className="flex-1 bg-surface dark:bg-surface-dark border border-border dark:border-border-dark rounded-xl px-3.5 py-2.5 text-xs text-text dark:text-text-dark placeholder:text-text-muted/60 dark:placeholder:text-text-muted-dark/60 outline-none focus:ring-1 focus:ring-focus-ring shadow-tactile-sm"
         />
-        <button
+        <motion.button
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.95 }}
           type="submit"
           disabled={!text.trim()}
-          className="px-3 py-2 rounded-lg bg-primary text-on-primary font-semibold text-sm
-                     hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          className="w-10 h-10 rounded-xl bg-primary hover:bg-primary-hover dark:bg-primary-dark dark:hover:bg-primary-hover-dark text-on-primary dark:text-on-primary-dark flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed shadow-tactile-sm transition-colors"
         >
-          ↑
-        </button>
+          <Send className="w-4 h-4" />
+        </motion.button>
       </form>
     </div>
   );

@@ -1,11 +1,14 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { motion } from 'motion/react';
+import { User, Mail, Lock, ArrowRight, Radio, AlertCircle, Eye, EyeOff, RadioTower, Cpu } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 const Register = () => {
   const { register } = useAuth();
   const navigate = useNavigate();
   const [form, setForm] = useState({ name: '', email: '', password: '' });
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -15,7 +18,7 @@ const Register = () => {
     e.preventDefault();
     setError('');
     if (form.password.length < 6) {
-      setError('Password must be at least 6 characters.');
+      setError('Password must contain at least 6 characters.');
       return;
     }
     setLoading(true);
@@ -23,120 +26,229 @@ const Register = () => {
       await register(form.name, form.email, form.password);
       navigate('/dashboard');
     } catch (err) {
-      setError(err.message);
+      setError(err.message || 'Registration failed. Please check inputs.');
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex bg-bg">
-      {/* ── Left brand panel ────────────────────────────────────────── */}
-      <div className="hidden lg:flex flex-col justify-between w-2/5 bg-panel p-10">
-        <div>
-          <h1 className="text-4xl font-bold text-panel-text mb-3">🔊 Sonar</h1>
-          <p className="text-panel-text-2 text-lg leading-relaxed">
-            Join Sonar and start making crystal-clear video calls with anyone, anywhere.
-            <br />
-            <span className="text-panel-accent font-semibold">Create. Connect. Call.</span>
-          </p>
+    <div className="min-h-screen flex flex-col lg:flex-row bg-bg dark:bg-bg-dark text-text dark:text-text-dark bg-noise-subtle">
+      {/* ── Left Editorial Masthead Panel (Deep Espresso) ── */}
+      <div className="relative w-full lg:w-1/2 xl:w-7/12 bg-panel bg-noise p-8 lg:p-14 flex flex-col justify-between overflow-hidden border-b lg:border-b-0 lg:border-r border-border-dark/30">
+        {/* Subtle Grid Graphic */}
+        <div className="absolute inset-0 pointer-events-none opacity-10">
+          <svg className="w-full h-full" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <pattern id="grid-register" width="40" height="40" patternUnits="userSpaceOnUse">
+                <path d="M 40 0 L 0 0 0 40" fill="none" stroke="currentColor" strokeWidth="0.8" className="text-panel-text" />
+              </pattern>
+            </defs>
+            <rect width="100%" height="100%" fill="url(#grid-register)" />
+          </svg>
         </div>
-        <ul className="space-y-3 text-panel-text-2 text-sm">
-          <li className="flex items-center gap-2">
-            <span className="text-panel-accent">✦</span> Free to use
-          </li>
-          <li className="flex items-center gap-2">
-            <span className="text-panel-accent">✦</span> HD video & audio
-          </li>
-          <li className="flex items-center gap-2">
-            <span className="text-panel-accent">✦</span> Secure, ephemeral calls
-          </li>
-        </ul>
-      </div>
 
-      {/* ── Right: Register form ─────────────────────────────────────── */}
-      <div className="flex-1 flex items-center justify-center px-6">
-        <div className="w-full max-w-md">
-          <div className="lg:hidden text-center mb-8">
-            <h1 className="text-3xl font-bold text-primary">🔊 Sonar</h1>
+        {/* Top Header */}
+        <div className="relative z-10">
+          <div className="flex items-center justify-between mb-12">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center text-on-primary shadow-tactile-md">
+                <Radio className="w-5 h-5 text-on-primary" />
+              </div>
+              <span className="font-display font-extrabold text-2xl tracking-tight text-panel-text">
+                SONAR
+              </span>
+            </div>
+            <span className="font-mono text-xs uppercase px-2.5 py-1 rounded-md bg-white/5 border border-white/10 text-panel-accent tracking-wider">
+              OPERATOR ENROLL // 02
+            </span>
           </div>
 
-          <h2 className="text-2xl font-bold text-text mb-1">Create your account</h2>
-          <p className="text-text-muted text-sm mb-8">Join Sonar to get started</p>
+          {/* Oversized Typographic Masthead */}
+          <div className="space-y-4">
+            <span className="font-mono text-xs uppercase tracking-widest text-panel-accent font-semibold flex items-center gap-2">
+              <span className="w-2 h-0.5 bg-panel-accent inline-block" />
+              STATION INITIALIZATION
+            </span>
+            <h1 className="font-display font-extrabold text-5xl sm:text-6xl xl:text-7xl tracking-tighter text-panel-text leading-[0.92]">
+              ESTABLISH <br />
+              <span className="text-panel-accent">YOUR OWN</span> <br />
+              STATION.
+            </h1>
+            <p className="text-panel-text-2 text-base sm:text-lg max-w-md font-normal leading-relaxed pt-2">
+              Broadcast your availability across our live presence network. Direct calling with zero friction.
+            </p>
+          </div>
+        </div>
 
-          {error && (
-            <div className="mb-5 px-4 py-3 rounded-lg bg-danger-tint border border-danger/30 text-danger text-sm">
-              {error}
+        {/* Bottom Bento Feature Capsules */}
+        <div className="relative z-10 pt-12">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-xl">
+            <div className="p-3.5 rounded-xl bg-white/[0.04] border border-white/10 backdrop-blur-sm">
+              <div className="flex items-center gap-2 text-panel-accent font-mono text-xs mb-1">
+                <RadioTower className="w-3.5 h-3.5" /> INSTANT SIGNALING
+              </div>
+              <p className="text-panel-text text-xs leading-snug">
+                One-tap call requests with real-time audio/visual notifications.
+              </p>
             </div>
+            <div className="p-3.5 rounded-xl bg-white/[0.04] border border-white/10 backdrop-blur-sm">
+              <div className="flex items-center gap-2 text-panel-accent font-mono text-xs mb-1">
+                <Cpu className="w-3.5 h-3.5" /> ARCHITECTURAL STACK
+              </div>
+              <p className="text-panel-text text-xs leading-snug">
+                Engineered with Daily.co WebRTC audio-video and Socket.io state engine.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Right Editorial Registration Form ── */}
+      <div className="flex-1 flex items-center justify-center p-6 sm:p-10 lg:p-16">
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.28, ease: 'easeOut' }}
+          className="w-full max-w-md"
+        >
+          {/* Form Header */}
+          <div className="mb-8">
+            <span className="font-mono text-xs uppercase tracking-wider text-secondary dark:text-secondary-dark font-semibold">
+              NEW REGISTRATION // CALLSIGN
+            </span>
+            <h2 className="font-display font-bold text-3xl sm:text-4xl text-text dark:text-text-dark tracking-tight mt-1">
+              Create Account
+            </h2>
+            <p className="text-text-muted dark:text-text-muted-dark text-sm mt-1.5">
+              Set up your operator callsign and security credentials.
+            </p>
+          </div>
+
+          {/* Error Message */}
+          {error && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="mb-6 p-4 rounded-xl bg-danger-tint dark:bg-danger-tint-dark border border-danger/30 text-danger dark:text-danger-dark text-xs flex items-start gap-3"
+            >
+              <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+              <span>{error}</span>
+            </motion.div>
           )}
 
+          {/* Form */}
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-text-2 mb-1">Full Name</label>
-              <input
-                id="register-name"
-                name="name"
-                type="text"
-                required
-                value={form.name}
-                onChange={handleChange}
-                placeholder="Alice Smith"
-                className="w-full bg-bg border border-border rounded-xl px-4 py-3 text-sm
-                           text-text placeholder-text-muted outline-none
-                           focus:ring-2 focus:ring-focus-ring focus:border-transparent transition-all"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-text-2 mb-1">Email</label>
-              <input
-                id="register-email"
-                name="email"
-                type="email"
-                required
-                autoComplete="email"
-                value={form.email}
-                onChange={handleChange}
-                placeholder="you@example.com"
-                className="w-full bg-bg border border-border rounded-xl px-4 py-3 text-sm
-                           text-text placeholder-text-muted outline-none
-                           focus:ring-2 focus:ring-focus-ring focus:border-transparent transition-all"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-text-2 mb-1">Password</label>
-              <input
-                id="register-password"
-                name="password"
-                type="password"
-                required
-                autoComplete="new-password"
-                value={form.password}
-                onChange={handleChange}
-                placeholder="Min. 6 characters"
-                className="w-full bg-bg border border-border rounded-xl px-4 py-3 text-sm
-                           text-text placeholder-text-muted outline-none
-                           focus:ring-2 focus:ring-focus-ring focus:border-transparent transition-all"
-              />
+              <label
+                htmlFor="register-name"
+                className="block text-xs font-mono font-medium text-text-2 dark:text-text-2-dark uppercase tracking-wider mb-1.5"
+              >
+                Operator Callsign / Name
+              </label>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-text-muted dark:text-text-muted-dark">
+                  <User className="w-4 h-4" />
+                </div>
+                <input
+                  id="register-name"
+                  name="name"
+                  type="text"
+                  required
+                  value={form.name}
+                  onChange={handleChange}
+                  placeholder="Alex Rivera"
+                  className="w-full pl-10 pr-4 py-3 rounded-xl bg-surface dark:bg-surface-dark border border-border dark:border-border-dark text-sm text-text dark:text-text-dark placeholder:text-text-muted/60 dark:placeholder:text-text-muted-dark/60 outline-none focus:ring-2 focus:ring-focus-ring dark:focus:ring-focus-ring-dark focus:border-transparent transition-all shadow-tactile-sm"
+                />
+              </div>
             </div>
 
-            <button
+            <div>
+              <label
+                htmlFor="register-email"
+                className="block text-xs font-mono font-medium text-text-2 dark:text-text-2-dark uppercase tracking-wider mb-1.5"
+              >
+                Station Email
+              </label>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-text-muted dark:text-text-muted-dark">
+                  <Mail className="w-4 h-4" />
+                </div>
+                <input
+                  id="register-email"
+                  name="email"
+                  type="email"
+                  required
+                  autoComplete="email"
+                  value={form.email}
+                  onChange={handleChange}
+                  placeholder="alex@sonar.io"
+                  className="w-full pl-10 pr-4 py-3 rounded-xl bg-surface dark:bg-surface-dark border border-border dark:border-border-dark text-sm text-text dark:text-text-dark placeholder:text-text-muted/60 dark:placeholder:text-text-muted-dark/60 outline-none focus:ring-2 focus:ring-focus-ring dark:focus:ring-focus-ring-dark focus:border-transparent transition-all shadow-tactile-sm"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label
+                htmlFor="register-password"
+                className="block text-xs font-mono font-medium text-text-2 dark:text-text-2-dark uppercase tracking-wider mb-1.5"
+              >
+                Access Passphrase (Min. 6 chars)
+              </label>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-text-muted dark:text-text-muted-dark">
+                  <Lock className="w-4 h-4" />
+                </div>
+                <input
+                  id="register-password"
+                  name="password"
+                  type={showPassword ? 'text' : 'password'}
+                  required
+                  autoComplete="new-password"
+                  value={form.password}
+                  onChange={handleChange}
+                  placeholder="••••••••••••"
+                  className="w-full pl-10 pr-10 py-3 rounded-xl bg-surface dark:bg-surface-dark border border-border dark:border-border-dark text-sm text-text dark:text-text-dark placeholder:text-text-muted/60 dark:placeholder:text-text-muted-dark/60 outline-none focus:ring-2 focus:ring-focus-ring dark:focus:ring-focus-ring-dark focus:border-transparent transition-all shadow-tactile-sm"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-text-muted hover:text-text dark:text-text-muted-dark dark:hover:text-text-dark"
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+
+            <motion.button
+              whileHover={{ y: -1 }}
+              whileTap={{ scale: 0.98 }}
               type="submit"
               disabled={loading}
-              className="w-full py-3 rounded-xl font-semibold text-sm
-                         bg-primary hover:bg-primary-hover text-on-primary
-                         disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+              className="w-full mt-2 py-3.5 px-4 rounded-xl font-display font-semibold text-sm bg-primary hover:bg-primary-hover dark:bg-primary-dark dark:hover:bg-primary-hover-dark text-on-primary dark:text-on-primary-dark shadow-tactile-md transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              {loading ? 'Creating account…' : 'Create Account'}
-            </button>
+              {loading ? (
+                <div className="w-4 h-4 border-2 border-on-primary border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <>
+                  <span>Create Station</span>
+                  <ArrowRight className="w-4 h-4" />
+                </>
+              )}
+            </motion.button>
           </form>
 
-          <p className="mt-6 text-center text-sm text-text-muted">
-            Already have an account?{' '}
-            <Link to="/login" className="text-primary font-semibold hover:underline">
-              Sign in
+          {/* Switch to Login */}
+          <div className="mt-8 pt-6 border-t border-border dark:border-border-dark flex items-center justify-between text-xs text-text-muted dark:text-text-muted-dark">
+            <span>Already have a station?</span>
+            <Link
+              to="/login"
+              className="font-mono font-semibold text-primary dark:text-primary-dark hover:underline flex items-center gap-1"
+            >
+              Sign In &rarr;
             </Link>
-          </p>
-        </div>
+          </div>
+        </motion.div>
       </div>
     </div>
   );
